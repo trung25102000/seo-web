@@ -1,0 +1,98 @@
+name: Build Artifact
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+
+jobs:
+  build-artifact:
+    name: Build Deployment Artifact
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: none
+          extensions: mbstring, bcmath, ctype, fileinfo, json, openssl, pdo, pdo_sqlite, sqlite3, tokenizer, xml
+          tools: composer:v2
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor
+            ~/.composer/cache/files
+          key: ${{ runner.os }}-artifact-php-8.4-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-artifact-php-8.4-composer-
+
+      - name: Install production Composer dependencies
+        run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-progress
+
+      - name: Setup Node.js
+        if: ${{ hashFiles('package.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install npm dependencies
+        if: ${{ hashFiles('package.json') != '' }}
+        run: npm ci
+
+      - name: Build frontend assets
+        if: ${{ hashFiles('package.json') != '' }}
+        run: npm run build --if-present
+
+      - name: Prepare artifact directory
+        run: |
+          rm -rf deploy-artifact
+          mkdir -p deploy-artifact
+          rsync -a ./ deploy-artifact/ \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='node_modules' \
+            --exclude='tests' \
+            --exclude='storage/logs' \
+            --exclude='.env'
+          mkdir -p deploy-artifact/storage/logs
+          find deploy-artifact/storage/logs -mindepth 1 -delete
+
+      - name: Create artifact archive
+        run: |
+          cd deploy-artifact
+          zip -r ../laravel-artifact.zip .
+
+      - name: Upload GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: laravel-artifact
+          path: laravel-artifact.zip
+          if-no-files-found: error
+
+      - name: Configure AWS credentials
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' && secrets.AWS_REGION != '' && secrets.S3_BUCKET != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Upload artifact to S3
+        if: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' && secrets.AWS_REGION != '' && secrets.S3_BUCKET != '' }}
+        env:
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+        run: |
+          aws s3 cp laravel-artifact.zip "s3://${S3_BUCKET}/artifacts/laravel-artifact-${GITHUB_SHA}.zip"
