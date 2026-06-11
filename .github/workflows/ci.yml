@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  laravel-ci:
+    name: Laravel CI
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          coverage: none
+          extensions: mbstring, bcmath, ctype, fileinfo, json, openssl, pdo, pdo_sqlite, sqlite3, tokenizer, xml
+          tools: composer:v2
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            vendor
+            ~/.composer/cache/files
+          key: ${{ runner.os }}-php-8.4-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-8.4-composer-
+
+      - name: Install Composer dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Prepare Laravel environment
+        run: |
+          cp .env.example .env
+          php artisan key:generate --ansi
+
+      - name: Setup Node.js
+        if: ${{ hashFiles('package.json') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install npm dependencies
+        if: ${{ hashFiles('package.json') != '' }}
+        run: npm ci
+
+      - name: Build frontend assets
+        if: ${{ hashFiles('package.json') != '' }}
+        run: npm run build --if-present
+
+      - name: Check Laravel version
+        run: php artisan --version
+
+      - name: Clear config cache
+        run: php artisan config:clear
+
+      - name: Run Laravel Pint
+        if: ${{ hashFiles('vendor/bin/pint') != '' }}
+        run: ./vendor/bin/pint --test
+
+      - name: Run PHPStan
+        if: ${{ hashFiles('vendor/bin/phpstan') != '' }}
+        run: ./vendor/bin/phpstan analyse --no-progress
+
+      - name: Run PHPUnit
+        if: ${{ hashFiles('phpunit.xml', 'phpunit.xml.dist') != '' }}
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ":memory:"
+        run: php artisan test
+
+      - name: Run Pest
+        if: ${{ hashFiles('pest.php', 'tests/Pest.php', 'vendor/bin/pest') != '' }}
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ":memory:"
+        run: ./vendor/bin/pest
