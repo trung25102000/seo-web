@@ -91,3 +91,18 @@ jobs:
           DB_CONNECTION: sqlite
           DB_DATABASE: ":memory:"
         run: ./vendor/bin/pest
+
+      - name: Prepare CI handoff artifact
+        run: |
+          rm -rf ci-handoff
+          mkdir -p ci-handoff
+          rsync -a public/build/ ci-handoff/public-build/ --ignore-missing-args
+          if [ -f package-lock.json ]; then cp package-lock.json ci-handoff/package-lock.json; fi
+          if [ -f composer.lock ]; then cp composer.lock ci-handoff/composer.lock; fi
+
+      - name: Upload CI handoff artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-handoff-${{ github.sha }}
+          path: ci-handoff
+          if-no-files-found: warn

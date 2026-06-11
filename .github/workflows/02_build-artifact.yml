@@ -46,20 +46,23 @@ jobs:
       - name: Install production Composer dependencies
         run: composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction --no-progress
 
-      - name: Setup Node.js
-        if: ${{ hashFiles('package.json') != '' }}
-        uses: actions/setup-node@v4
+      - name: Download CI handoff artifact
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/download-artifact@v4
         with:
-          node-version: "22"
-          cache: npm
+          name: ci-handoff-${{ github.event.workflow_run.head_sha }}
+          path: ci-handoff
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install npm dependencies
-        if: ${{ hashFiles('package.json') != '' }}
-        run: npm ci
-
-      - name: Build frontend assets
-        if: ${{ hashFiles('package.json') != '' }}
-        run: npm run build --if-present
+      - name: Restore frontend build output
+        if: ${{ github.event_name == 'workflow_run' }}
+        run: |
+          if [ -d ci-handoff/public-build ]; then
+            rm -rf public/build
+            mkdir -p public/build
+            rsync -a ci-handoff/public-build/ public/build/
+          fi
 
       - name: Prepare artifact directory
         run: |
